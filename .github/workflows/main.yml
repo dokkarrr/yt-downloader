@@ -1,497 +1,58 @@
-name: yt-downloader
+name: Quick Manual Download
 
 on:
-  # Trigger on push to main/master branches
-  push:
-    branches: [ main, master, develop ]
-    paths:
-      - '*.py'
-      - 'requirements.txt'
-      - '.github/workflows/*.yml'
-  
-  # Trigger on pull requests
-  pull_request:
-    branches: [ main, master ]
-    paths:
-      - '*.py'
-  
-  # Allow manual trigger from GitHub UI
   workflow_dispatch:
     inputs:
-      youtube_url:
-        description: 'YouTube URL to download'
+      url:
+        description: 'YouTube URL'
         required: true
-        default: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
         type: string
-      download_type:
-        description: 'Download type'
+      format:
+        description: 'Format'
         required: true
-        default: 'video'
+        default: 'mp4'
         type: choice
         options:
-          - video
-          - audio
-          - subtitles
-          - playlist
-      resolution:
-        description: 'Video resolution (if video)'
-        required: false
-        default: '1080p'
-        type: choice
-        options:
-          - '2160p'
-          - '1440p'
-          - '1080p'
-          - '720p'
-          - '480p'
-      audio_format:
-        description: 'Audio format (if audio)'
-        required: false
-        default: 'mp3'
-        type: choice
-        options:
-          - mp3
-          - m4a
-          - flac
-          - wav
-      subtitle_lang:
-        description: 'Subtitle language (if subtitles)'
-        required: false
-        default: 'en'
-        type: choice
-        options:
-          - en
-          - bn
-          - hi
-          - ar
-          - es
-          - fr
-          - de
-          - ja
-          - ko
-          - zh-Hans
-  
-  # Schedule weekly runs (every Sunday at 00:00 UTC)
-  schedule:
-    - cron: '0 0 * * 0'
-  
-  # Run on repository dispatch (for API triggers)
-  repository_dispatch:
-    types: [download, test]
-
-# Environment variables
-env:
-  PYTHON_VERSION: '3.11'
-  FFMPEG_VERSION: '6.0'
-  DOWNLOAD_DIR: ${{ runner.temp }}/yt-downloads
-
-# Permissions
-permissions:
-  contents: read
-  actions: write
-  checks: write
-  issues: write
-  pull-requests: write
+          - mp4 (video)
+          - mp3 (audio)
+          - srt (subtitles)
 
 jobs:
-  # Job 1: Test the downloader functionality
-  test-downloader:
-    name: Test Downloader (${{ matrix.os }} / Python ${{ matrix.python-version }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.9', '3.10', '3.11', '3.12']
-        exclude:
-          # Exclude some combinations to save resources
-          - os: macos-latest
-            python-version: '3.9'
-          - os: windows-latest
-            python-version: '3.9'
-    
-    runs-on: ${{ matrix.os }}
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-    
-    - name: Setup Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-        cache-dependency-path: |
-          requirements.txt
-          **/*.py
-    
-    - name: Cache pip packages
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    
-    - name: Install FFmpeg (Ubuntu)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
-        ffmpeg -version
-    
-    - name: Install FFmpeg (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew install ffmpeg
-        ffmpeg -version
-    
-    - name: Install FFmpeg (Windows)
-      if: runner.os == 'Windows'
-      run: |
-        choco install ffmpeg -y --no-progress
-        refreshenv
-        ffmpeg -version
-      shell: pwsh
-    
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt || pip install yt-dlp rich inquirer
-        pip list
-    
-    - name: Run test suite
-      run: python yt_downloader.py --test
-      env:
-        GITHUB_ACTIONS: true
-        PYTHONUNBUFFERED: 1
-    
-    - name: Test video info fetch
-      run: |
-        python -c "
-        import yt_dlp
-        url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            assert info.get('title') is not None
-            print(f'✅ Successfully fetched: {info.get(\"title\")}')
-        "
-    
-    - name: Upload test results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: test-results-${{ matrix.os }}-py${{ matrix.python-version }}
-        path: |
-          *.log
-          *.json
-        retention-days: 7
-
-  # Job 2: Actual download (only on manual trigger or schedule)
-  download-content:
-    name: Download YouTube Content
-    if: |
-      github.event_name == 'workflow_dispatch' || 
-      github.event_name == 'schedule' ||
-      github.event_name == 'repository_dispatch'
+  download:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        cache: 'pip'
-    
-    - name: Cache yt-dlp data
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cache/yt-dlp
-          ~/.yt-dlp-cache
-        key: yt-dlp-cache-${{ github.run_id }}
-        restore-keys: |
-          yt-dlp-cache-
-    
-    - name: Install FFmpeg
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
-        ffmpeg -version
-    
-    - name: Install dependencies
-      run: |
-        pip install --upgrade pip
-        pip install yt-dlp rich inquirer
-    
-    - name: Create download directory
-      run: |
-        mkdir -p ${{ env.DOWNLOAD_DIR }}
-        echo "Download directory: ${{ env.DOWNLOAD_DIR }}"
-    
-    - name: Set download parameters
-      id: params
-      run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "url=${{ github.event.inputs.youtube_url }}" >> $GITHUB_OUTPUT
-          echo "type=${{ github.event.inputs.download_type }}" >> $GITHUB_OUTPUT
-          echo "resolution=${{ github.event.inputs.resolution }}" >> $GITHUB_OUTPUT
-          echo "audio_format=${{ github.event.inputs.audio_format }}" >> $GITHUB_OUTPUT
-          echo "subtitle_lang=${{ github.event.inputs.subtitle_lang }}" >> $GITHUB_OUTPUT
-        elif [ "${{ github.event_name }}" = "schedule" ]; then
-          # Weekly test download
-          echo "url=https://www.youtube.com/watch?v=jNQXAC9IVRw" >> $GITHUB_OUTPUT
-          echo "type=video" >> $GITHUB_OUTPUT
-          echo "resolution=720p" >> $GITHUB_OUTPUT
-        else
-          # Repository dispatch
-          echo "url=${{ github.event.client_payload.url || 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }}" >> $GITHUB_OUTPUT
-          echo "type=${{ github.event.client_payload.type || 'video' }}" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Download content
-      run: |
-        python -c "
-        import sys
-        import subprocess
-        
-        url = '${{ steps.params.outputs.url }}'
-        download_type = '${{ steps.params.outputs.type }}'
-        
-        print(f'📥 Downloading: {url}')
-        print(f'Type: {download_type}')
-        
-        # Build command based on type
-        cmd = ['python', 'yt_downloader.py', '--download', url]
-        
-        if download_type == 'audio':
-            cmd.extend(['--audio-only', '--audio-format', '${{ steps.params.outputs.audio_format || 'mp3' }}'])
-        elif download_type == 'subtitles':
-            cmd.extend(['--subtitles-only', '--sub-lang', '${{ steps.params.outputs.subtitle_lang || 'en' }}'])
-        
-        # Run downloader in non-interactive mode
-        env = os.environ.copy()
-        env['GITHUB_ACTIONS'] = 'true'
-        env['NON_INTERACTIVE'] = 'true'
-        
-        result = subprocess.run(cmd, env=env, capture_output=False)
-        sys.exit(result.returncode)
-        "
-    
-    - name: List downloaded files
-      run: |
-        echo "📁 Downloaded files:"
-        find ${{ env.DOWNLOAD_DIR }} -type f -name "*.mp4" -o -name "*.mp3" -o -name "*.srt" | head -20
-        du -sh ${{ env.DOWNLOAD_DIR }}
-    
-    - name: Upload download artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: youtube-downloads-${{ github.run_id }}
-        path: ${{ env.DOWNLOAD_DIR }}/**
-        retention-days: 14
-        compression-level: 6
-    
-    - name: Generate download report
-      if: always()
-      run: |
-        cat > download_report.md << EOF
-        # YouTube Download Report
-        
-        **Run ID:** ${{ github.run_id }}
-        **Time:** $(date)
-        **URL:** ${{ steps.params.outputs.url }}
-        **Type:** ${{ steps.params.outputs.type }}
-        
-        ## Download Location
-        \`\`\`
-        ${{ env.DOWNLOAD_DIR }}
-        \`\`\`
-        
-        ## Artifacts
-        Download artifacts are attached to this workflow run.
-        
-        ## System Info
-        - OS: Ubuntu Latest
-        - Python: ${{ env.PYTHON_VERSION }}
-        - FFmpeg: Installed
-        EOF
-        
-        cat download_report.md
-    
-    - name: Upload report
-      uses: actions/upload-artifact@v4
-      with:
-        name: download-report-${{ github.run_id }}
-        path: download_report.md
-        retention-days: 14
-
-  # Job 3: Multi-URL playlist download
-  download-playlist:
-    name: Download Playlist
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.download_type == 'playlist'
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Install FFmpeg & dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
-        pip install yt-dlp rich inquirer
-    
-    - name: Download playlist
-      run: |
-        mkdir -p ${{ env.DOWNLOAD_DIR }}/playlist
-        python yt_downloader.py --download "${{ github.event.inputs.youtube_url }}" --playlist --max-count 10
-      env:
-        GITHUB_ACTIONS: true
-        DOWNLOAD_DIR: ${{ env.DOWNLOAD_DIR }}/playlist
-    
-    - name: Upload playlist artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: playlist-downloads-${{ github.run_id }}
-        path: ${{ env.DOWNLOAD_DIR }}/playlist/**
-        retention-days: 14
-
-  # Job 4: Performance monitoring
-  performance-metrics:
-    name: Performance Metrics
-    runs-on: ubuntu-latest
-    needs: [test-downloader]
-    if: always()
-    
-    steps:
-    - name: Download test results
-      uses: actions/download-artifact@v4
-      with:
-        path: test-results
-      continue-on-error: true
-    
-    - name: Generate performance report
-      run: |
-        echo "## Performance Metrics" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| Test Date | $(date) |" >> $GITHUB_STEP_SUMMARY
-        echo "| Run ID | ${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| Python Version | ${{ env.PYTHON_VERSION }} |" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Calculate success rate if there are test results
-        if [ -d "test-results" ]; then
-          success_count=$(find test-results -name "*.json" -exec grep -l '"status": "success"' {} \; | wc -l)
-          total_count=$(find test-results -name "*.json" | wc -l)
-          if [ $total_count -gt 0 ]; then
-            success_rate=$((success_count * 100 / total_count))
-            echo "| Success Rate | ${success_rate}% |" >> $GITHUB_STEP_SUMMARY
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install yt-dlp
+      
+      - name: Download
+        run: |
+          if [ "${{ inputs.format }}" = "mp4" ]; then
+            yt-dlp -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' \
+                   -o "downloads/%(title)s.%(ext)s" \
+                   "${{ inputs.url }}"
+          elif [ "${{ inputs.format }}" = "mp3" ]; then
+            yt-dlp -f bestaudio --extract-audio --audio-format mp3 \
+                   -o "downloads/%(title)s.%(ext)s" \
+                   "${{ inputs.url }}"
+          else
+            yt-dlp --write-subs --sub-lang en --skip-download \
+                   -o "downloads/%(title)s.%(ext)s" \
+                   "${{ inputs.url }}"
           fi
-        fi
-
-  # Job 5: Notification on completion
-  notify:
-    name: Send Notifications
-    runs-on: ubuntu-latest
-    needs: [test-downloader, download-content, performance-metrics]
-    if: always() && github.event_name != 'pull_request'
-    
-    steps:
-    - name: Check status
-      id: status
-      run: |
-        if [ "${{ needs.test-downloader.result }}" = "success" ] && \
-           [ "${{ needs.download-content.result }}" = "success" ]; then
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "message=✅ YouTube Downloader workflow completed successfully!" >> $GITHUB_OUTPUT
-        elif [ "${{ needs.test-downloader.result }}" = "failure" ]; then
-          echo "status=failure" >> $GITHUB_OUTPUT
-          echo="message=❌ Tests failed! Check the workflow logs." >> $GITHUB_OUTPUT
-        else
-          echo "status=partial" >> $GITHUB_OUTPUT
-          echo="message=⚠️ Workflow completed with warnings." >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Create GitHub summary
-      run: |
-        cat >> $GITHUB_STEP_SUMMARY << EOF
-        # Workflow Summary: YouTube Downloader
-        
-        **Status:** ${{ steps.status.outputs.message }}
-        **Run URL:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        **Trigger:** ${{ github.event_name }}
-        
-        ## Job Results
-        - Test Downloader: ${{ needs.test-downloader.result }}
-        - Download Content: ${{ needs.download-content.result }}
-        - Performance Metrics: ${{ needs.performance-metrics.result }}
-        
-        ## Artifacts
-        Download artifacts are available for 14 days.
-        EOF
-    
-    - name: Send to Discord (optional)
-      if: secrets.DISCORD_WEBHOOK_URL != null
-      uses: Ilshidur/action-discord@master
-      env:
-        DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      with:
-        args: |
-          **YouTube Downloader Workflow**
-          Status: ${{ steps.status.outputs.status }}
-          Run: ${{ github.run_id }}
-          Trigger: ${{ github.event_name }}
-    
-    - name: Send to Slack (optional)
-      if: secrets.SLACK_WEBHOOK_URL != null
-      uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ steps.status.outputs.status }}
-        fields: repo,message,commit,author,action,eventName,ref,workflow
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-# Job 6: Cleanup old artifacts (weekly)
-  cleanup:
-    name: Cleanup Old Artifacts
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    
-    steps:
-    - name: Delete old artifacts
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const { data: artifacts } = await github.rest.actions.listArtifactsForRepo({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-          });
-          
-          const now = Date.now();
-          const retentionDays = 14;
-          const cutoff = now - (retentionDays * 24 * 60 * 60 * 1000);
-          
-          for (const artifact of artifacts.artifacts) {
-            const createdAt = Date.parse(artifact.created_at);
-            if (createdAt < cutoff) {
-              console.log(`Deleting artifact: ${artifact.name} (created: ${artifact.created_at})`);
-              await github.rest.actions.deleteArtifact({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                artifact_id: artifact.id,
-              });
-            }
-          }
+      
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-content
+          path: downloads/
+          retention-days: 7
